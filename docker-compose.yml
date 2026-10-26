@@ -15,10 +15,13 @@ services:
     container_name: reclip-telegram
     command: ["python", "/app/telegram_bot.py"]
     environment:
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN in your environment}
+      API_ID: ${API_ID:?Set API_ID in .env}
+      API_HASH: ${API_HASH:?Set API_HASH in .env}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN in .env}
       DOWNLOAD_DIR: /app/downloads
-      TELEGRAM_MAX_FILE_MB: ${TELEGRAM_MAX_FILE_MB:-1950}
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-2000}
       BOT_MAX_CONCURRENT: ${BOT_MAX_CONCURRENT:-2}
+      PROGRESS_INTERVAL: ${PROGRESS_INTERVAL:-2}
     volumes:
       - reclip-downloads:/app/downloads
     restart: unless-stopped
