@@ -215,6 +215,7 @@ def extract_info(url: str, cookie_options: dict | None = None) -> dict:
         "skip_download": True, "socket_timeout": 30,
         "retries": 2, "extractor_retries": 2,
     }
+    opts.update(cookie_options or {})
     with yt_dlp.YoutubeDL(opts) as ydl:
         return ydl.extract_info(url, download=False)
 
@@ -318,6 +319,7 @@ async def download_and_upload(client: Client, chat_id: int, uid: int, status_mes
         "retries": 3, "fragment_retries": 3, "socket_timeout": 30,
         "continuedl": True, "overwrites": True,
     }
+    opts.update(cookie_options_for_url(uid, url))
     if mode == "audio":
         opts.update({
             "format": "bestaudio/best",
