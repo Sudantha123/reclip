@@ -26,6 +26,22 @@ logging.basicConfig(
 )
 log = logging.getLogger("reclip.telegram")
 BASE_DIR = Path(__file__).resolve().parent
+ENV_FILE = BASE_DIR / ".env"
+
+def load_env_file():
+    if not ENV_FILE.is_file():
+        return
+    for raw_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+load_env_file()
 
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "").strip()
@@ -36,7 +52,7 @@ MAX_CONCURRENT = max(1, int(os.getenv("BOT_MAX_CONCURRENT", "2")))
 PROGRESS_INTERVAL = max(1.0, float(os.getenv("PROGRESS_INTERVAL", "2.0")))
 
 if not API_ID or not API_HASH or not BOT_TOKEN:
-    raise SystemExit("Set API_ID, API_HASH and TELEGRAM_BOT_TOKEN in .env")
+    raise SystemExit(f"Missing API_ID, API_HASH or TELEGRAM_BOT_TOKEN. Check {ENV_FILE}")
 
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app = Client(
