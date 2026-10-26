@@ -249,16 +249,36 @@ async def download_and_upload(client: Client, chat_id: int, uid: int, status_mes
                 )
 
         await edit_progress(status_message, "📤 <b>Uploading to Telegram…</b>", True)
-        # Pyrogram uses Telegram's MTProto API rather than the HTTP Bot API.
-        # send_document is used for both audio and video to avoid re-encoding.
-        await client.send_document(
-            chat_id=chat_id,
-            document=str(path),
-            file_name=safe_filename(title) + path.suffix,
-            caption=caption,
-            progress=upload_progress,
-            progress_args=(),
-        )
+        # Pyrogram uses Telegram MTProto; send media with its native Telegram preview.
+        if mode == "audio" and path.suffix.lower() == ".mp3":
+            await client.send_audio(
+                chat_id=chat_id,
+                audio=str(path),
+                file_name=safe_filename(title) + ".mp3",
+                title=title[:64],
+                caption=caption,
+                progress=upload_progress,
+                progress_args=(),
+            )
+        elif path.suffix.lower() == ".mp4":
+            await client.send_video(
+                chat_id=chat_id,
+                video=str(path),
+                file_name=safe_filename(title) + ".mp4",
+                caption=caption,
+                supports_streaming=True,
+                progress=upload_progress,
+                progress_args=(),
+            )
+        else:
+            await client.send_document(
+                chat_id=chat_id,
+                document=str(path),
+                file_name=safe_filename(title) + path.suffix,
+                caption=caption,
+                progress=upload_progress,
+                progress_args=(),
+            )
         await edit_progress(status_message, "🎉 <b>Complete!</b>\nFile uploaded to this chat.", True)
 
     except (DownloadError, RPCError, FloodWait, RuntimeError, OSError) as exc:
