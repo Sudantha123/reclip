@@ -52,6 +52,108 @@ active_lock = threading.Lock()
 last_edit: dict[tuple[int, int], float] = {}
 
 
+
+# Per-user cookie profiles. Cookie files contain session secrets: never print values.
+COOKIE_ROOT = BASE_DIR / "cookies"
+COOKIE_ROOT.mkdir(parents=True, exist_ok=True)
+cookie_upload_targets = {}
+
+def normalize_domain(value):
+    value = value.strip().lower()
+    if "://" in value:
+        value = urlparse(value).hostname or ""
+    value = value.split("/", 1)[0].split(":", 1)[0].strip(".")
+    if not value or any(ch.isspace() for ch in value) or "." not in value:
+        return None
+    if not re.fullmatch(r"[a-z0-9.-]+", value) or ".." in value:
+        return None
+    return value
+
+def cookie_profile_dir(uid):
+    path = COOKIE_ROOT / str(uid)
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass
+    return path
+
+def cookie_profiles(uid):
+    folder = cookie_profile_dir(uid)
+    result = []
+    for path in sorted(folder.glob("*.txt")):
+        domain = path.stem
+        try:
+            records = parse_cookie_file(path)
+            result.append({"domain": domain, "path": path, "count": len(records),
+                           "expired": sum(1 for x in records if x["expiry"] and x["expiry"] <= int(time.time()))})
+        except ValueError:
+            result.append({"domain": domain, "path": path, "count": 0, "expired": 0, "invalid": True})
+    return result
+
+def parse_cookie_file(path):
+    records = []
+    with open(path, "r", encoding="utf-8", errors="replace") as stream:
+        for raw in stream:
+            line = raw.rstrip("\\r\\n")
+            if not line or line.startswith("#") and not line.startswith("#HttpOnly_"):
+                continue
+            if line.startswith("#HttpOnly_"):
+                line = line[len("#HttpOnly_"):]
+            parts = line.split("\\t")
+            if len(parts) != 7:
+                raise ValueError("Invalid Netscape cookies.txt format: expected 7 tab-separated fields.")
+            domain, include_subdomains, cookie_path, secure, expiry, name, value = parts
+            if not name or not domain:
+                raise ValueError("Cookie row is missing a domain or name.")
+            try:
+                expires = int(expiry or "0")
+            except ValueError:
+                raise ValueError("Cookie expiry must be a Unix timestamp.")
+            records.append({
+                "domain": domain.lstrip(".").lower(),
+                "include_subdomains": include_subdomains.upper() == "TRUE" or domain.startswith("."),
+                "path": cookie_path or "/",
+                "secure": secure.upper() == "TRUE",
+                "expiry": expires,
+                "name": name,
+            })
+    if not records:
+        raise ValueError("No Netscape-format cookie records found.")
+    return records
+
+def cookie_domain_matches(cookie_domain, include_subdomains, host):
+    cookie_domain = cookie_domain.lstrip(".").lower()
+    host = (host or "").lower().strip(".")
+    return host == cookie_domain or (include_subdomains and host.endswith("." + cookie_domain))
+
+def cookie_file_for_url(uid, url):
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        return None
+    matches = []
+    for profile in cookie_profiles(uid):
+        if profile.get("invalid"):
+            continue
+        try:
+            records = parse_cookie_file(profile["path"])
+        except ValueError:
+            continue
+        score = 0
+        for record in records:
+            if cookie_domain_matches(record["domain"], record["include_subdomains"], host):
+                score += 1
+        if score:
+            # Prefer the most specific profile name; only cookies whose own
+            # Netscape domain scope matches the URL will be honored by yt-dlp.
+            matches.append((len(profile["domain"]), score, profile["path"]))
+    return max(matches, default=(0, 0, None), key=lambda item: (item[0], item[1]))[2]
+
+def cookie_options_for_url(uid, url):
+    path = cookie_file_for_url(uid, url)
+    return {"cookiefile": str(path)} if path else {}
+
+
 def valid_url(value: str) -> bool:
     try:
         parsed = urlparse(value.strip())
@@ -90,7 +192,7 @@ def safe_filename(name: str) -> str:
     return re.sub(r"\s+", " ", name)[:150].strip() or "reclip-media"
 
 
-def extract_info(url: str) -> dict:
+def extract_info(url: str, cookie_options: dict | None = None) -> dict:
     opts = {
         "quiet": True, "no_warnings": True, "noplaylist": True,
         "skip_download": True, "socket_timeout": 30,
@@ -302,6 +404,192 @@ def _run_ytdlp(opts: dict, url: str):
         ydl.download([url])
 
 
+
+@app.on_message(filters.private & filters.command("cookies"))
+async def cookies_command(client, message):
+    uid = message.from_user.id
+    args = message.text.split(maxsplit=1)
+    if len(args) == 2:
+        domain = normalize_domain(args[1])
+        if not domain:
+            await message.reply_text("Send a valid domain, e.g. /cookies youtube.com")
+            return
+        cookie_upload_targets[uid] = domain
+        await message.reply_text(
+            f"🍪 <b>Cookie upload target:</b> <code>{html.escape(domain)}</code>\\n"
+            "Now upload the Netscape-format cookies.txt as a Telegram document. "
+            "The profile is private to your Telegram account."
+        )
+        return
+    profiles = cookie_profiles(uid)
+    if not profiles:
+        await message.reply_text(
+            "🍪 No cookie profiles saved. Start with <code>/cookies youtube.com</code>, "
+            "then upload your cookies.txt file."
+        )
+        return
+    lines = ["🍪 <b>Your cookie profiles</b>"]
+    for p in profiles:
+        status = "⚠️ invalid format" if p.get("invalid") else f"{p['count']} cookies · {p['expired']} expired"
+        lines.append(f"• <code>{html.escape(p['domain'])}</code> — {status}")
+    lines.append("\\nUse /cookieinfo for details or /checkcookies URL to test a site.")
+    await message.reply_text("\\n".join(lines), disable_web_page_preview=True)
+
+@app.on_message(filters.private & filters.command("cookieinfo"))
+async def cookieinfo_command(client, message):
+    uid = message.from_user.id
+    profiles = cookie_profiles(uid)
+    if not profiles:
+        await message.reply_text("No cookie profiles saved. Use /cookies domain.com first.")
+        return
+    lines = ["🍪 <b>Cookie profile details</b>"]
+    for p in profiles:
+        lines.append(f"\\n<b>{html.escape(p['domain'])}</b>")
+        if p.get("invalid"):
+            lines.append("Format: invalid")
+            continue
+        lines.append(f"Records: {p['count']} · Expired: {p['expired']}")
+        try:
+            records = parse_cookie_file(p["path"])
+            domains = sorted({r["domain"] for r in records})
+            lines.append("Cookie domains: " + html.escape(", ".join(domains[:15])))
+            if len(domains) > 15:
+                lines.append(f"… and {len(domains) - 15} more")
+            lines.append("Secure cookies: " + str(sum(r["secure"] for r in records)))
+            lines.append("HttpOnly flags are preserved when present.")
+        except ValueError as exc:
+            lines.append("Format error: " + html.escape(str(exc)))
+    lines.append("\\n⚠️ Cookie values are never displayed.")
+    await message.reply_text("\\n".join(lines), disable_web_page_preview=True)
+
+@app.on_message(filters.private & filters.command("checkcookies"))
+async def checkcookies_command(client, message):
+    uid = message.from_user.id
+    args = message.text.split(maxsplit=1)
+    if len(args) != 2 or not valid_url(args[1]):
+        await message.reply_text("Usage: <code>/checkcookies https://example.com/</code>")
+        return
+    url = args[1].strip()
+    path = cookie_file_for_url(uid, url)
+    if not path:
+        await message.reply_text(
+            "❌ No saved cookies match this URL's host and cookie domain scope. "
+            "Use /cookies example.com and upload a valid cookies.txt."
+        )
+        return
+    try:
+        records = parse_cookie_file(path)
+    except ValueError as exc:
+        await message.reply_text("❌ Invalid cookie file: " + html.escape(str(exc)))
+        return
+    host = (urlparse(url).hostname or "").lower()
+    matched = [r for r in records if cookie_domain_matches(r["domain"], r["include_subdomains"], host)]
+    expired = sum(1 for r in matched if r["expiry"] and r["expiry"] <= int(time.time()))
+    status = await message.reply_text(
+        f"🍪 <b>Cookie file check</b>\\nHost: <code>{html.escape(host)}</code>\\n"
+        f"Profile: <code>{html.escape(path.stem)}</code>\\n"
+        f"Matching cookie records: {len(matched)}\\nExpired matches: {expired}\\n"
+        "⏳ Testing whether the site accepts this session…"
+    )
+    try:
+        test_opts = {
+            "quiet": True, "no_warnings": True, "noplaylist": True,
+            "skip_download": True, "socket_timeout": 20, "retries": 1,
+            "extractor_retries": 1, "cookiefile": str(path),
+        }
+        info = await asyncio.to_thread(
+            lambda: _extract_info_with_options(url, test_opts)
+        )
+        await status.edit_text(
+            "✅ <b>Extraction test succeeded</b>\\n"
+            f"Title: {html.escape(str(info.get('title') or 'Unknown')[:180])}\\n"
+            "This confirms the extractor could access the URL; it does not guarantee every account-only feature works."
+        )
+    except Exception as exc:
+        await status.edit_text(
+            "⚠️ <b>Extraction test failed</b>\\n"
+            + html.escape(str(exc)[:700])
+            + "\\nCookies may be expired, unsupported by the site, or unnecessary for this URL."
+        )
+
+def _extract_info_with_options(url, opts):
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=False)
+
+@app.on_message(filters.private & filters.command("deletecookies"))
+async def deletecookies_command(client, message):
+    uid = message.from_user.id
+    args = message.text.split(maxsplit=1)
+    if len(args) != 2:
+        await message.reply_text("Usage: <code>/deletecookies example.com</code>")
+        return
+    domain = normalize_domain(args[1])
+    if not domain:
+        await message.reply_text("Invalid domain.")
+        return
+    path = cookie_profile_dir(uid) / f"{domain}.txt"
+    if not path.exists():
+        await message.reply_text("No exact profile found for that domain.")
+        return
+    path.unlink()
+    cookie_upload_targets.pop(uid, None)
+    await message.reply_text(f"🗑 Deleted cookie profile for <code>{html.escape(domain)}</code>.")
+
+@app.on_message(filters.private & filters.document)
+async def cookie_upload_handler(client, message):
+    uid = message.from_user.id
+    target = cookie_upload_targets.get(uid)
+    document = message.document
+    filename = (document.file_name or "").lower()
+    if not target:
+        await message.reply_text(
+            "To save cookies for a site, first send <code>/cookies example.com</code>, "
+            "then upload the cookies.txt file."
+        )
+        return
+    if not (filename.endswith(".txt") or filename.endswith(".cookies")):
+        await message.reply_text("Please upload a Netscape-format .txt cookies file.")
+        return
+    if document.file_size and document.file_size > 5 * 1024 * 1024:
+        await message.reply_text("Cookie file is too large (maximum 5 MB).")
+        return
+    temp = cookie_profile_dir(uid) / f".upload-{uuid.uuid4().hex}.tmp"
+    try:
+        await message.reply_text("🔎 Validating cookie file…")
+        await client.download_media(message, file_name=str(temp))
+        records = parse_cookie_file(temp)
+        host_domains = sorted({r["domain"] for r in records})
+        # The selected profile label is not used to broaden cookie scope;
+        # actual Netscape cookie domains control where cookies are sent.
+        profile_path = cookie_profile_dir(uid) / f"{target}.txt"
+        os.replace(temp, profile_path)
+        try:
+            profile_path.chmod(0o600)
+        except OSError:
+            pass
+        matched = sum(
+            1 for r in records
+            if cookie_domain_matches(r["domain"], r["include_subdomains"], target)
+        )
+        await message.reply_text(
+            f"✅ <b>Cookies saved</b>\\nProfile: <code>{html.escape(target)}</code>\\n"
+            f"Records: {len(records)} · Domains in file: {len(host_domains)}\\n"
+            f"Records matching profile host: {matched}\\n"
+            "Use /cookieinfo to inspect metadata or /checkcookies URL to test it. "
+            "Cookie values are never shown."
+        )
+        cookie_upload_targets.pop(uid, None)
+    except Exception as exc:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        await message.reply_text(
+            "❌ Could not save cookies: " + html.escape(str(exc)[:600])
+            + "\\nExport cookies in Netscape cookies.txt format and try again."
+        )
+
+
 @app.on_message(filters.private & filters.command(["start", "help"]))
 async def start_handler(client: Client, message):
     await message.reply_text(
@@ -310,7 +598,7 @@ async def start_handler(client: Client, message):
         "• Inline quality buttons\n• Download progress, speed and ETA\n"
         "• Telegram upload progress through Pyrogram/MTProto\n"
         "• Large file uploads, up to about 2 GB where supported\n\n"
-        "Use /cancel to clear your current link. Only download media you are authorized to save.",
+        "Use /cancel to clear your current link.\\nCookie commands: /cookies, /cookieinfo, /checkcookies URL, /deletecookies domain. Only use cookies from your own accounts and sites you are authorized to access.",
         disable_web_page_preview=True,
     )
 
@@ -331,7 +619,7 @@ async def link_handler(client: Client, message):
 
     status = await message.reply_text("🔎 <b>Fetching link details…</b>")
     try:
-        info = await asyncio.to_thread(extract_info, url)
+        info = await asyncio.to_thread(extract_info, url, cookie_options_for_url(uid, url))
         qualities = quality_options(info)
         sessions[uid] = {"url": url, "info": info, "qualities": qualities}
         title = html.escape((info.get("title") or "Untitled media")[:180])
