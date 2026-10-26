@@ -1,2 +1,5 @@
 flask
 yt-dlp
+pyTelegramBotAPI
+requests
+requests-toolbelt
