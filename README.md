@@ -57,39 +57,48 @@ YouTube, TikTok, Instagram, Twitter/X, Reddit, Facebook, Vimeo, Twitch, Dailymot
 - **Download engine:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) + [ffmpeg](https://ffmpeg.org/)
 - **Dependencies:** 2 (Flask, yt-dlp)
 
-## Telegram Bot Mode
+## Telegram Bot Mode (Pyrogram / MTProto)
 
-The Telegram bot is an optional interface alongside the original web UI. It fetches a link preview (title, creator, duration and thumbnail), then provides inline buttons for **MP4 / MP3** and available video resolutions. It reports yt-dlp download percentage, speed and ETA, followed by multipart upload progress while sending the finished file to Telegram.
+The optional Pyrogram bot keeps the original ReClip web UI and adds Telegram inline buttons for **MP4 / MP3**, video quality selection, link metadata/thumbnail preview, live yt-dlp download percentage/speed/ETA, and Telegram upload percentage. Uploads use Telegram's MTProto API through Pyrogram instead of the HTTP Bot API. The configured target is about **2 GB per file**, subject to Telegram's current account/API limits.
 
-### Run with Docker Compose
+### Configure and run with Docker Compose
 
-1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
-2. In the repository directory, set the token and start both services:
+1. Create a bot with [@BotFather](https://t.me/BotFather).
+2. Get `API_ID` and `API_HASH` from [my.telegram.org](https://my.telegram.org).
+3. Copy the environment template and fill in your credentials:
 
 ```bash
-export TELEGRAM_BOT_TOKEN="123456:replace-with-your-token"
+cp .env.example .env
+nano .env
 docker compose up -d --build
 docker compose logs -f reclip-telegram
 ```
 
-The web UI remains at **http://YOUR_SERVER_IP:8899** and the Telegram bot starts polling automatically. Keep the token private.
+Keep `.env` and your bot credentials private. Do not commit real tokens to GitHub.
 
-Optional environment variables:
+- Web UI: **http://YOUR_SERVER_IP:8899**
+- Bot: start it by opening the bot in Telegram and sending `/start`.
 
-- `TELEGRAM_MAX_FILE_MB` — maximum file size to attempt uploading (defaults to 49 MB for compatibility with the standard hosted Telegram Bot API).
-- `BOT_MAX_CONCURRENT` — maximum simultaneous downloads across users (defaults to 2).
+### Configuration
+
+- `API_ID`, `API_HASH`, `TELEGRAM_BOT_TOKEN`: required Telegram credentials.
+- `MAX_FILE_SIZE_MB=2000`: target maximum output size (~2 GB). This is a local guard, not a way to bypass Telegram's server-side limits.
+- `BOT_MAX_CONCURRENT=2`: maximum simultaneous downloads on the VPS.
+- `PROGRESS_INTERVAL=2`: minimum interval between progress message edits, in seconds.
 
 ### Run the bot directly
 
-Install FFmpeg, install the Python requirements, then run:
+Install FFmpeg and Python dependencies, then configure the same variables from `.env.example` in your shell:
 
 ```bash
 pip install -r requirements.txt
-export TELEGRAM_BOT_TOKEN="123456:replace-with-your-token"
+export API_ID="your_api_id"
+export API_HASH="your_api_hash"
+export TELEGRAM_BOT_TOKEN="your_bot_token"
 python telegram_bot.py
 ```
 
-For larger Telegram uploads, configure a self-hosted [Local Bot API Server](https://core.telegram.org/bots/api#using-a-local-bot-api-server) and adapt the upload endpoint in `telegram_bot.py` to that server. Downloading and conversion use yt-dlp/FFmpeg; only download media you are authorized to save.
+Pyrogram uses MTProto for large file uploads. Availability and exact file-size limits can depend on Telegram's current rules and the bot/account context; if a 2 GB upload is rejected, check the returned Telegram error. Downloading/conversion uses yt-dlp and FFmpeg. Only download media you are authorized to save.
 
 ## Disclaimer
 
