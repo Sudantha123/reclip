@@ -30,7 +30,7 @@ log = logging.getLogger("reclip.telegram")
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", str(Path(__file__).parent / "downloads")))
-MAX_FILE_MB = int(os.getenv("TELEGRAM_MAX_FILE_MB", "1950"))
+MAX_FILE_MB = int(os.getenv("TELEGRAM_MAX_FILE_MB", "49"))
 MAX_CONCURRENT = max(1, int(os.getenv("BOT_MAX_CONCURRENT", "2")))
 if not BOT_TOKEN:
     raise SystemExit("Missing TELEGRAM_BOT_TOKEN environment variable.")
@@ -346,9 +346,14 @@ def callbacks(call):
         bot.send_message(call.message.chat.id, "🔗 Send the next video/audio URL.")
         return
     parts = data.split(":")
-    if len(parts) >= 3 and parts[-1].isdigit() and int(parts[-1]) != user_id:
-        bot.answer_callback_query(call.id, "This menu belongs to another user.", show_alert=True)
-        return
+    if parts[0] in ("mode", "back", "q") and len(parts) >= 2:
+        try:
+            menu_owner = int(parts[1])
+        except ValueError:
+            menu_owner = -1
+        if menu_owner != user_id:
+            bot.answer_callback_query(call.id, "This menu belongs to another user.", show_alert=True)
+            return
     session = sessions.get(user_id)
     if not session:
         bot.answer_callback_query(call.id, "Session expired. Send the URL again.", show_alert=True)
@@ -414,16 +419,11 @@ def callbacks(call):
                 return
             active_users.add(user_id)
         bot.answer_callback_query(call.id, "Starting download…")
-        try:
-            if call.message.content_type == "photo":
-                bot.edit_message_caption("⏳ <b>Starting download…</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-            else:
-                bot.edit_message_text("⏳ <b>Starting download…</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-        except Exception:
-            pass
+        # Keep the preview card intact; progress updates use a dedicated text message.
+        status_message = bot.send_message(call.message.chat.id, "⏳ <b>Starting download…</b>")
         thread = threading.Thread(
             target=download_and_send,
-            args=(call.message.chat.id, user_id, call.message.message_id, mode, format_id),
+            args=(call.message.chat.id, user_id, status_message.message_id, mode, format_id),
             daemon=True,
         )
         thread.start()
