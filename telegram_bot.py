@@ -346,10 +346,11 @@ def callbacks(call):
         bot.send_message(call.message.chat.id, "🔗 Send the next video/audio URL.")
         return
     parts = data.split(":")
-    if parts[0] in ("mode", "back", "q") and len(parts) >= 2:
+    if parts[0] in ("mode", "back", "q"):
+        owner_index = 2 if parts[0] == "mode" else 1
         try:
-            menu_owner = int(parts[1])
-        except ValueError:
+            menu_owner = int(parts[owner_index])
+        except (ValueError, IndexError):
             menu_owner = -1
         if menu_owner != user_id:
             bot.answer_callback_query(call.id, "This menu belongs to another user.", show_alert=True)
