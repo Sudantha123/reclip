@@ -57,6 +57,40 @@ YouTube, TikTok, Instagram, Twitter/X, Reddit, Facebook, Vimeo, Twitch, Dailymot
 - **Download engine:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) + [ffmpeg](https://ffmpeg.org/)
 - **Dependencies:** 2 (Flask, yt-dlp)
 
+## Telegram Bot Mode
+
+The Telegram bot is an optional interface alongside the original web UI. It fetches a link preview (title, creator, duration and thumbnail), then provides inline buttons for **MP4 / MP3** and available video resolutions. It reports yt-dlp download percentage, speed and ETA, followed by multipart upload progress while sending the finished file to Telegram.
+
+### Run with Docker Compose
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
+2. In the repository directory, set the token and start both services:
+
+```bash
+export TELEGRAM_BOT_TOKEN="123456:replace-with-your-token"
+docker compose up -d --build
+docker compose logs -f reclip-telegram
+```
+
+The web UI remains at **http://YOUR_SERVER_IP:8899** and the Telegram bot starts polling automatically. Keep the token private.
+
+Optional environment variables:
+
+- `TELEGRAM_MAX_FILE_MB` — maximum file size to attempt uploading (defaults to 49 MB for compatibility with the standard hosted Telegram Bot API).
+- `BOT_MAX_CONCURRENT` — maximum simultaneous downloads across users (defaults to 2).
+
+### Run the bot directly
+
+Install FFmpeg, install the Python requirements, then run:
+
+```bash
+pip install -r requirements.txt
+export TELEGRAM_BOT_TOKEN="123456:replace-with-your-token"
+python telegram_bot.py
+```
+
+For larger Telegram uploads, configure a self-hosted [Local Bot API Server](https://core.telegram.org/bots/api#using-a-local-bot-api-server) and adapt the upload endpoint in `telegram_bot.py` to that server. Downloading and conversion use yt-dlp/FFmpeg; only download media you are authorized to save.
+
 ## Disclaimer
 
 This tool is intended for personal use only. Please respect copyright laws and the terms of service of the platforms you download from. The developers are not responsible for any misuse of this tool.
